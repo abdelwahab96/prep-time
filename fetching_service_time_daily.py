@@ -149,7 +149,11 @@ def create_excel_report():
     
     # Create DataFrame from all collected orders
     df = pd.DataFrame(all_orders)
-    
+    # ADD THESE 4 LINES HERE:
+    if 'kitchen_received' in df.columns:
+        df['kitchen_received'] = df['kitchen_received'].dt.tz_localize(None)
+    if 'kitchen_done' in df.columns:
+        df['kitchen_done'] = df['kitchen_done'].dt.tz_localize(None)
     print(f"📊 Total orders collected: {len(df)}")
     
     # Filter out orders with missing period_minutes
