@@ -1,6 +1,7 @@
+pandas==1.5.3
+numpy==1.21.6
 requests==2.31.0
-pandas==2.0.3
 openpyxl==3.1.2
 sendgrid==6.10.0
 python-dotenv==1.0.0
-numpy==1.21.6
+
