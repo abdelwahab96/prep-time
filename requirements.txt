@@ -1,5 +1,5 @@
-pandas==1.5.3
 numpy==1.21.6
+pandas==1.5.3
 requests==2.31.0
 openpyxl==3.1.2
 sendgrid==6.10.0
