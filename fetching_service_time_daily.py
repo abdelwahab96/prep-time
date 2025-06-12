@@ -3,7 +3,6 @@ import json
 from datetime import datetime,timedelta
 import time 
 from zoneinfo import ZoneInfo
-# from psycopg2.extras import execute_values
 import requests
 import pandas as pd
 import json
