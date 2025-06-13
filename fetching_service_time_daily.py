@@ -177,17 +177,34 @@ def create_excel_report():
     
     # Create Excel file with multiple sheets
     bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-    filename = f'kitchen_performance_report_{bus_date}.xlsx'
     
-    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-        # Sheet 1: Branch Summary
-        branch_summary.to_excel(writer, sheet_name='Branch Summary', index=False)
+    # FIXED: Save to /tmp directory on Render
+    filename = f'/tmp/kitchen_performance_report_{bus_date}.xlsx'
+    
+    print(f"📁 Saving Excel file to: {filename}")
+    
+    try:
+        with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+            # Sheet 1: Branch Summary
+            branch_summary.to_excel(writer, sheet_name='Branch Summary', index=False)
+            
+            # Sheet 2: All Orders Detail
+            df.to_excel(writer, sheet_name='All Orders', index=False)
+            
+            # Sheet 3: Only orders with preparation times
+            df_with_periods.to_excel(writer, sheet_name='Orders with Prep Times', index=False)
         
-        # Sheet 2: All Orders Detail
-        df.to_excel(writer, sheet_name='All Orders', index=False)
-        
-        # Sheet 3: Only orders with preparation times
-        df_with_periods.to_excel(writer, sheet_name='Orders with Prep Times', index=False)
+        # Verify file was created successfully
+        if os.path.exists(filename):
+            file_size = os.path.getsize(filename)
+            print(f"✅ Excel file created successfully: {filename} ({file_size} bytes)")
+        else:
+            print(f"❌ Failed to create Excel file: {filename}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error creating Excel file: {e}")
+        return None
     
     print(f"📊 Excel report created: {filename}")
     print("\n📈 Branch Performance Summary:")
@@ -206,8 +223,23 @@ def send_email_report(filename):
         SENDER_EMAIL = os.environ.get('SENDER_EMAIL')
         RECIPIENT_EMAILS = os.environ.get('RECIPIENT_EMAIL')
         email_list = [email.strip() for email in RECIPIENT_EMAILS.split(',')]
+        
         if not all([SENDGRID_API_KEY, SENDER_EMAIL, RECIPIENT_EMAILS]):
             print("❌ Missing email configuration in environment variables")
+            return
+        
+        # Check if file exists before trying to attach
+        if not os.path.exists(filename):
+            print(f"❌ File {filename} does not exist!")
+            return
+        
+        # Get file size for debugging
+        file_size = os.path.getsize(filename)
+        print(f"📁 File size: {file_size} bytes")
+        
+        # Check if file is too large (SendGrid limit is 30MB)
+        if file_size > 30 * 1024 * 1024:  # 30MB in bytes
+            print(f"❌ File too large for email attachment: {file_size / 1024 / 1024:.2f}MB")
             return
         
         bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -231,25 +263,50 @@ def send_email_report(filename):
         )
         
         # Attach Excel file
-        with open(filename, 'rb') as f:
-            data = f.read()
-            encoded_file = base64.b64encode(data).decode()
-        
-        attachment = Attachment(
-            FileContent(encoded_file),
-            FileName(filename),
-            FileType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        )
-        message.attachment = attachment
+        try:
+            with open(filename, 'rb') as f:
+                data = f.read()
+                encoded_file = base64.b64encode(data).decode()
+            
+            # Just the filename without path for the attachment name
+            attachment_filename = os.path.basename(filename)
+            
+            attachment = Attachment(
+                FileContent(encoded_file),
+                FileName(attachment_filename),
+                FileType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                Disposition("attachment")
+            )
+            
+            message.add_attachment(attachment)
+            print(f"✅ Attachment added: {attachment_filename}")
+            
+        except Exception as attach_error:
+            print(f"❌ Error creating attachment: {attach_error}")
+            return
         
         # Send email
         sg = SendGridAPIClient(api_key=SENDGRID_API_KEY)
         response = sg.send(message)
         
-        print(f"📧 Email sent successfully! Status: {response.status_code}")
+        print(f"📧 Email sent! Status: {response.status_code}")
+        
+        if response.status_code == 202:
+            print("✅ Email accepted by SendGrid")
+        else:
+            print(f"⚠️ Unexpected status code: {response.status_code}")
+        
+        # Clean up: Delete the temporary file after sending
+        try:
+            os.remove(filename)
+            print(f"🗑️ Temporary file deleted: {filename}")
+        except Exception as cleanup_error:
+            print(f"⚠️ Could not delete temporary file: {cleanup_error}")
         
     except Exception as e:
         print(f"❌ Error sending email: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Main execution
 if __name__ == "__main__":
