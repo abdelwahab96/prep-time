@@ -165,34 +165,59 @@ def create_excel_report():
         print("❌ No orders with valid preparation times found")
         return None
     
-    # Group by branch and calculate average preparation time
-    branch_summary = df_with_periods.groupby(['branch_id', 'branch_name']).agg({
-        'period_minutes': ['mean', 'count', 'min', 'max'],
-        'exc_vat_price': 'sum'
-    }).round(2)
+    # Create the specific report with your required columns
+    branch_report = df_with_periods.groupby(['branch_id', 'branch_name']).agg({
+        'period_minutes': ['count', 'mean'],  # count for total orders, mean for average duration
+    }).reset_index()
     
     # Flatten column names
-    branch_summary.columns = ['avg_prep_time_minutes', 'order_count', 'min_prep_time', 'max_prep_time', 'total_revenue']
-    branch_summary = branch_summary.reset_index()
+    branch_report.columns = ['branch_code', 'branch_name', 'total_orders', 'average_duration_orders']
     
-    # Create Excel file with multiple sheets
+    # Calculate delayed orders (orders > 15 minutes)
+    delayed_orders = df_with_periods[df_with_periods['period_minutes'] > 15].groupby(['branch_id', 'branch_name']).size().reset_index(name='delayed_orders')
+    delayed_orders.columns = ['branch_code', 'branch_name', 'delayed_orders']
+    
+    # Merge the delayed orders data
+    branch_report = branch_report.merge(
+        delayed_orders[['branch_code', 'delayed_orders']], 
+        on='branch_code', 
+        how='left'
+    )
+    
+    # Fill NaN values with 0 for branches with no delayed orders
+    branch_report['delayed_orders'] = branch_report['delayed_orders'].fillna(0).astype(int)
+    
+    # Calculate percentage of delayed orders
+    branch_report['% of delayed orders'] = (
+        (branch_report['delayed_orders'] / branch_report['total_orders']) * 100
+    ).round(2)
+    
+    # Round average duration to 2 decimal places
+    branch_report['average_duration_orders'] = branch_report['average_duration_orders'].round(2)
+    
+    # Reorder columns to match your requirements
+    branch_report = branch_report[[
+        'branch_code', 
+        'branch_name', 
+        'total_orders', 
+        'delayed_orders', 
+        '% of delayed orders', 
+        'average_duration_orders'
+    ]]
+    
+    # Create Excel file with the specific report
     bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    # FIXED: Save to /tmp directory on Render
     filename = f'/tmp/kitchen_performance_report_{bus_date}.xlsx'
     
     print(f"📁 Saving Excel file to: {filename}")
     
     try:
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-            # Sheet 1: Branch Summary
-            branch_summary.to_excel(writer, sheet_name='Branch Summary', index=False)
+            # Main sheet with your specific columns
+            branch_report.to_excel(writer, sheet_name='Kitchen Performance Report', index=False)
             
-            # Sheet 2: All Orders Detail
-            df.to_excel(writer, sheet_name='All Orders', index=False)
-            
-            # Sheet 3: Only orders with preparation times
-            df_with_periods.to_excel(writer, sheet_name='Orders with Prep Times', index=False)
+            # Optional: Add a detailed sheet with all orders (you can remove this if not needed)
+            df_with_periods.to_excel(writer, sheet_name='Detailed Orders', index=False)
         
         # Verify file was created successfully
         if os.path.exists(filename):
@@ -207,8 +232,8 @@ def create_excel_report():
         return None
     
     print(f"📊 Excel report created: {filename}")
-    print("\n📈 Branch Performance Summary:")
-    print(branch_summary.to_string(index=False))
+    print("\n📈 Kitchen Performance Report:")
+    print(branch_report.to_string(index=False))
     
     # Send email with the report
     send_email_report(filename)
