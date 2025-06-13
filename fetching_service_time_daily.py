@@ -273,15 +273,16 @@ def send_email_report(filename):
         message = Mail(
             from_email=SENDER_EMAIL,
             to_emails=email_list,
-            subject=f'Daily Kitchen Performance Report - {bus_date}',
+            subject=f'{bus_date} - تقرير زمن الخدمة ',
             html_content=f'''
-            <h2>Daily Kitchen Performance Report</h2>
-            <p>Please find attached the kitchen performance report for <strong>{bus_date}</strong>.</p>
-            <p>The report includes:</p>
+            <h2>تقرير زمن الخدمة</h2>
+            <p> <strong>{bus_date}</strong> مرفق لكم تقرير زمن الخدمة ليوم </p>
+            <p>الملف يحتوي على:</p>
             <ul>
-                <li>Branch performance summary with average preparation times</li>
-                <li>All orders details</li>
-                <li>Orders with preparation time analysis</li>
+                <li>عدد الطلبات الكلي</li>
+                <li>الطلبات التى تجاوزت ال 15 دقيقة (الطلبات المتأخرة)</li>
+                <li>نسبة الطلبات المتأخرة</li>
+                <li>متوسط زمن الخدمة</li>
             </ul>
             <p>Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
             '''
