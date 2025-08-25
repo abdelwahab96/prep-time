@@ -16,6 +16,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+import psycopg2
+
 
 # Load environment variables
 load_dotenv()
@@ -184,7 +186,7 @@ def create_excel_report():
     
     # Round average duration to 2 decimal places
     branch_report['average_duration_orders'] = branch_report['average_duration_orders'].round(2)
-    
+    branch_report['business_date'] = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
     # Reorder columns to match your requirements
     branch_report = branch_report[[
         'branch_code', 
@@ -197,6 +199,7 @@ def create_excel_report():
     
     # Create Excel file with the specific report
     bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+    store_to_db(branch_report, bus_date)
     filename = f'/tmp/kitchen_performance_report_{bus_date}.xlsx'
     
     print(f"📁 Saving Excel file to: {filename}")
@@ -230,6 +233,90 @@ def create_excel_report():
     
     return filename
 
+def store_to_db(branch_report, bus_date):
+    """Store the branch report to PostgreSQL database"""
+    try:
+        # Database connection
+        DATABASE_URL = "postgresql://abdelwahab_u:7GJ75YZYiZ6nJN1Z3mYtOokCjmf0K8PP@dpg-d2intt9r0fns738numf0-a.oregon-postgres.render.com/orders_db_1y7j" 
+        conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+        cur = conn.cursor()
+        
+        # Create table if it doesn't exist (fixed SQL syntax)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS service_time (
+                branch_code VARCHAR(20),
+                branch_name VARCHAR(100),
+                total_orders INTEGER,
+                delayed_orders INTEGER,
+                prc_of_delayed_orders NUMERIC(10,2),
+                average_duration_orders NUMERIC(10,2),
+                business_date DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Prepare data for insertion
+        records = []
+        for _, row in branch_report.iterrows():
+            record = (
+                row['branch_code'],
+                row['branch_name'],
+                int(row['total_orders']),
+                int(row['delayed_orders']),
+                float(row['% of delayed orders']),
+                float(row['average_duration_orders']),
+                bus_date
+            )
+            records.append(record)
+        
+        # Insert data using execute_values for better performance
+        from psycopg2.extras import execute_values
+        
+        # Check if data for this business_date already exists (to avoid duplicates)
+        cur.execute("SELECT COUNT(*) FROM service_time WHERE business_date = %s", (bus_date,))
+        existing_count = cur.fetchone()[0]
+        
+        if existing_count > 0:
+            print(f"⚠️ Data for {bus_date} already exists ({existing_count} records). Skipping insertion to avoid duplicates.")
+            print("💡 If you want to update the data, manually delete the records first or modify the script.")
+            return
+        
+        # Insert new records
+        execute_values(
+            cur,
+            """
+            INSERT INTO service_time 
+            (branch_code, branch_name, total_orders, delayed_orders, 
+             prc_of_delayed_orders, average_duration_orders, business_date) 
+            VALUES %s
+            """,
+            records,
+            template=None,
+            page_size=100
+        )
+        
+        # Commit the transaction
+        conn.commit()
+        
+        print(f"✅ Successfully stored {len(records)} branch records to database for {bus_date}")
+        
+    except psycopg2.Error as db_error:
+        print(f"❌ Database error: {db_error}")
+        if conn:
+            conn.rollback()
+    except Exception as e:
+        print(f"❌ Error storing data to database: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        # Clean up database connections
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+        print("🔌 Database connection closed")
+
+
 def send_email_report(filename):
     """Send the Excel report via SMTP (Gmail)"""
     try:
@@ -260,7 +347,7 @@ def send_email_report(filename):
             return
         
         bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-        
+   
         # Create message
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
