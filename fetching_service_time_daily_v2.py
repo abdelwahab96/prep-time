@@ -199,7 +199,7 @@ def create_excel_report():
     
     # Create Excel file with the specific report
     bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-    store_to_db(branch_report, bus_date)
+    #store_to_db(branch_report, bus_date)
     filename = f'/tmp/kitchen_performance_report_{bus_date}.xlsx'
     
     print(f"📁 Saving Excel file to: {filename}")
@@ -430,4 +430,5 @@ if __name__ == "__main__":
         print("❌ Missing API_TOKEN or BASE_URL in environment variables")
     else:
         operating(TOKEN, BASE_URL)
+
 
