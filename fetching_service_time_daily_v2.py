@@ -50,7 +50,7 @@ def operating(TOKEN, BASE_URL, order_ref=0):
             "filter[status]": "4",
             "include": "branch",
             "sort": "-created_at",
-            "filter[reference_after]": order_ref
+            # "filter[reference_after]": order_ref
         }
         
         # Set headers with token
@@ -430,5 +430,6 @@ if __name__ == "__main__":
         print("❌ Missing API_TOKEN or BASE_URL in environment variables")
     else:
         operating(TOKEN, BASE_URL)
+
 
 
