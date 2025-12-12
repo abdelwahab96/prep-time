@@ -43,14 +43,19 @@ def operating(TOKEN, BASE_URL, order_ref=0):
     has_more_pages = True
     bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
     
+    # Rate limiting configuration
+    max_retries = 3
+    base_delay = 2  # Base delay between requests (increased from 1 to 2 seconds)
+    
+    print(f"📅 Fetching orders for business date: {bus_date}")
+    
     while has_more_pages:
         params = {
             "page": page,
             "filter[business_date]": bus_date,
             "filter[status]": "4",
             "include": "branch",
-            "sort": "-created_at",
-            # "filter[reference_after]": order_ref
+            "sort": "-created_at"
         }
         
         # Set headers with token
@@ -58,38 +63,62 @@ def operating(TOKEN, BASE_URL, order_ref=0):
             "Authorization": f"Bearer {TOKEN}"
         }
 
-        # Make the request
-        response = requests.get(BASE_URL + endpoint, headers=headers, params=params)
+        # Retry logic for rate limiting
+        retry_count = 0
+        success = False
+        
+        while retry_count < max_retries and not success:
+            # Make the request
+            response = requests.get(BASE_URL + endpoint, headers=headers, params=params)
 
-        # Check response
-        if response.status_code == 200:
-            data = response.json()
-            extracting(data['data'])
+            # Check response
+            if response.status_code == 200:
+                data = response.json()
+                extracting(data['data'])
 
-            print(f"✅ Success! Page {page} data received")
-            
-            meta = data['meta']
-            current_page = meta['current_page']
-            last_page = meta['last_page']
-            
-            if current_page >= last_page:
+                print(f"✅ Success! Page {page} data received")
+                
+                meta = data['meta']
+                current_page = meta['current_page']
+                last_page = meta['last_page']
+                
+                print(f"📊 Progress: {current_page}/{last_page} pages | Total orders collected: {len(all_orders)}")
+                
+                if current_page >= last_page:
+                    has_more_pages = False
+                else:
+                    page += 1
+                    time.sleep(base_delay)  # Wait between successful requests
+                
+                success = True
+                
+            elif response.status_code == 429:
+                retry_count += 1
+                # Exponential backoff: wait longer each retry
+                wait_time = base_delay * (2 ** retry_count)  # 4s, 8s, 16s
+                print(f"⚠️ Rate limit hit (429) on page {page}. Retry {retry_count}/{max_retries}. Waiting {wait_time} seconds...")
+                time.sleep(wait_time)
+                
+                if retry_count >= max_retries:
+                    print(f"❌ Max retries reached for page {page}. Continuing to next page...")
+                    page += 1  # Skip this page and continue
+                    success = True  # Exit retry loop
+                    
+            elif response.status_code == 504:
+                print("❌ Timeout error (504) — try a smaller date range or check the server.")
                 has_more_pages = False
+                break
             else:
-                page += 1
-                time.sleep(1)
-            
-        elif response.status_code == 504:
-            print("❌ Timeout error (504) — try a smaller date range or check the server.")
-            break
-        else:
-            print(f"❌ Error {response.status_code}: {response.text}")
-            break
+                print(f"❌ Error {response.status_code}: {response.text}")
+                has_more_pages = False
+                break
     
     # After collecting all data, create DataFrame and Excel
     if all_orders:
+        print(f"\n📊 Final count: {len(all_orders)} orders collected")
         create_excel_report()
     else:
-        print("No orders data collected")
+        print("❌ No orders data collected")
 
 def extracting(data):
     global all_orders
@@ -141,11 +170,12 @@ def create_excel_report():
     
     # Create DataFrame from all collected orders
     df = pd.DataFrame(all_orders)
-    # ADD THESE 4 LINES HERE:
+    # Remove timezone info for Excel compatibility
     if 'kitchen_received' in df.columns:
         df['kitchen_received'] = df['kitchen_received'].dt.tz_localize(None)
     if 'kitchen_done' in df.columns:
         df['kitchen_done'] = df['kitchen_done'].dt.tz_localize(None)
+    
     print(f"📊 Total orders collected: {len(df)}")
     
     # Filter out orders with missing period_minutes
@@ -186,7 +216,7 @@ def create_excel_report():
     
     # Round average duration to 2 decimal places
     branch_report['average_duration_orders'] = branch_report['average_duration_orders'].round(2)
-    branch_report['business_date'] = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+    
     # Reorder columns to match your requirements
     branch_report = branch_report[[
         'branch_code', 
@@ -199,7 +229,6 @@ def create_excel_report():
     
     # Create Excel file with the specific report
     bus_date = (datetime.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-    #store_to_db(branch_report, bus_date)
     filename = f'/tmp/kitchen_performance_report_{bus_date}.xlsx'
     
     print(f"📁 Saving Excel file to: {filename}")
@@ -232,89 +261,6 @@ def create_excel_report():
     send_email_report(filename)
     
     return filename
-
-# def store_to_db(branch_report, bus_date):
-#     """Store the branch report to PostgreSQL database"""
-#     try:
-#         # Database connection
-#         DATABASE_URL = "postgresql://abdelwahab_u:7GJ75YZYiZ6nJN1Z3mYtOokCjmf0K8PP@dpg-d2intt9r0fns738numf0-a.oregon-postgres.render.com/orders_db_1y7j" 
-#         conn = psycopg2.connect(DATABASE_URL, sslmode="require")
-#         cur = conn.cursor()
-        
-#         # Create table if it doesn't exist (fixed SQL syntax)
-#         cur.execute("""
-#             CREATE TABLE IF NOT EXISTS service_time (
-#                 branch_code VARCHAR(20),
-#                 branch_name VARCHAR(100),
-#                 total_orders INTEGER,
-#                 delayed_orders INTEGER,
-#                 prc_of_delayed_orders NUMERIC(10,2),
-#                 average_duration_orders NUMERIC(10,2),
-#                 business_date DATE,
-#                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-#             )
-#         """)
-        
-#         # Prepare data for insertion
-#         records = []
-#         for _, row in branch_report.iterrows():
-#             record = (
-#                 row['branch_code'],
-#                 row['branch_name'],
-#                 int(row['total_orders']),
-#                 int(row['delayed_orders']),
-#                 float(row['% of delayed orders']),
-#                 float(row['average_duration_orders']),
-#                 bus_date
-#             )
-#             records.append(record)
-        
-#         # Insert data using execute_values for better performance
-#         from psycopg2.extras import execute_values
-        
-#         # Check if data for this business_date already exists (to avoid duplicates)
-#         cur.execute("SELECT COUNT(*) FROM service_time WHERE business_date = %s", (bus_date,))
-#         existing_count = cur.fetchone()[0]
-        
-#         if existing_count > 0:
-#             print(f"⚠️ Data for {bus_date} already exists ({existing_count} records). Skipping insertion to avoid duplicates.")
-#             print("💡 If you want to update the data, manually delete the records first or modify the script.")
-#             return
-        
-#         # Insert new records
-#         execute_values(
-#             cur,
-#             """
-#             INSERT INTO service_time 
-#             (branch_code, branch_name, total_orders, delayed_orders, 
-#              prc_of_delayed_orders, average_duration_orders, business_date) 
-#             VALUES %s
-#             """,
-#             records,
-#             template=None,
-#             page_size=100
-#         )
-        
-#         # Commit the transaction
-#         conn.commit()
-        
-#         print(f"✅ Successfully stored {len(records)} branch records to database for {bus_date}")
-        
-#     except psycopg2.Error as db_error:
-#         print(f"❌ Database error: {db_error}")
-#         if conn:
-#             conn.rollback()
-#     except Exception as e:
-#         print(f"❌ Error storing data to database: {e}")
-#         if conn:
-#             conn.rollback()
-#     finally:
-#         # Clean up database connections
-#         if cur:
-#             cur.close()
-#         if conn:
-#             conn.close()
-#         print("🔌 Database connection closed")
 
 
 def send_email_report(filename):
@@ -430,6 +376,3 @@ if __name__ == "__main__":
         print("❌ Missing API_TOKEN or BASE_URL in environment variables")
     else:
         operating(TOKEN, BASE_URL)
-
-
-
