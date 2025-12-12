@@ -178,41 +178,74 @@ def create_excel_report():
     
     print(f"📊 Total orders collected: {len(df)}")
     
-    # Filter out orders with missing period_minutes
+    # Separate orders with valid and invalid preparation times
     df_with_periods = df[df['period_minutes'].notna()].copy()
+    df_without_periods = df[df['period_minutes'].isna()].copy()
     
     print(f"📊 Orders with valid preparation times: {len(df_with_periods)}")
+    print(f"⚠️ Orders with invalid/missing preparation times: {len(df_without_periods)}")
     
-    if len(df_with_periods) == 0:
+    # Create report with ALL orders (valid + invalid)
+    # First, get counts for ALL orders per branch
+    all_orders_count = df.groupby(['branch_id', 'branch_name']).size().reset_index(name='total_orders')
+    all_orders_count.columns = ['branch_code', 'branch_name', 'total_orders']
+    
+    # Get counts for orders with INVALID preparation times
+    if len(df_without_periods) > 0:
+        invalid_orders_count = df_without_periods.groupby(['branch_id', 'branch_name']).size().reset_index(name='invalid_orders')
+        invalid_orders_count.columns = ['branch_code', 'branch_name', 'invalid_orders']
+    else:
+        invalid_orders_count = pd.DataFrame(columns=['branch_code', 'branch_name', 'invalid_orders'])
+    
+    # Calculate metrics for orders with VALID preparation times
+    if len(df_with_periods) > 0:
+        valid_metrics = df_with_periods.groupby(['branch_id', 'branch_name']).agg({
+            'period_minutes': 'mean'  # average duration
+        }).reset_index()
+        valid_metrics.columns = ['branch_code', 'branch_name', 'average_duration_orders']
+        
+        # Calculate delayed orders (orders > 15 minutes) from valid orders only
+        delayed_orders = df_with_periods[df_with_periods['period_minutes'] > 15].groupby(['branch_id', 'branch_name']).size().reset_index(name='delayed_orders')
+        delayed_orders.columns = ['branch_code', 'branch_name', 'delayed_orders']
+    else:
         print("❌ No orders with valid preparation times found")
         return None
     
-    # Create the specific report with your required columns
-    branch_report = df_with_periods.groupby(['branch_id', 'branch_name']).agg({
-        'period_minutes': ['count', 'mean'],  # count for total orders, mean for average duration
-    }).reset_index()
+    # Merge all data together
+    branch_report = all_orders_count.copy()
     
-    # Flatten column names
-    branch_report.columns = ['branch_code', 'branch_name', 'total_orders', 'average_duration_orders']
+    # Merge invalid orders count
+    branch_report = branch_report.merge(
+        invalid_orders_count[['branch_code', 'invalid_orders']], 
+        on='branch_code', 
+        how='left'
+    )
+    branch_report['invalid_orders'] = branch_report['invalid_orders'].fillna(0).astype(int)
     
-    # Calculate delayed orders (orders > 15 minutes)
-    delayed_orders = df_with_periods[df_with_periods['period_minutes'] > 15].groupby(['branch_id', 'branch_name']).size().reset_index(name='delayed_orders')
-    delayed_orders.columns = ['branch_code', 'branch_name', 'delayed_orders']
-    
-    # Merge the delayed orders data
+    # Merge delayed orders
     branch_report = branch_report.merge(
         delayed_orders[['branch_code', 'delayed_orders']], 
         on='branch_code', 
         how='left'
     )
-    
-    # Fill NaN values with 0 for branches with no delayed orders
     branch_report['delayed_orders'] = branch_report['delayed_orders'].fillna(0).astype(int)
     
-    # Calculate percentage of delayed orders
+    # Merge average duration
+    branch_report = branch_report.merge(
+        valid_metrics[['branch_code', 'average_duration_orders']], 
+        on='branch_code', 
+        how='left'
+    )
+    
+    # Calculate percentage of delayed orders (based on valid orders only)
+    # valid_orders = total_orders - invalid_orders
+    branch_report['valid_orders'] = branch_report['total_orders'] - branch_report['invalid_orders']
     branch_report['% of delayed orders'] = (
-        (branch_report['delayed_orders'] / branch_report['total_orders']) * 100
+        (branch_report['delayed_orders'] / branch_report['valid_orders']) * 100
     ).round(2)
+    
+    # Handle division by zero (if valid_orders is 0)
+    branch_report['% of delayed orders'] = branch_report['% of delayed orders'].fillna(0)
     
     # Round average duration to 2 decimal places
     branch_report['average_duration_orders'] = branch_report['average_duration_orders'].round(2)
@@ -221,10 +254,12 @@ def create_excel_report():
     branch_report = branch_report[[
         'branch_code', 
         'branch_name', 
-        'total_orders', 
-        'delayed_orders', 
-        '% of delayed orders', 
-        'average_duration_orders'
+        'total_orders',          # ALL orders (valid + invalid)
+        'invalid_orders',        # NEW: Orders without valid preparation times
+        'valid_orders',          # NEW: Orders with valid preparation times
+        'delayed_orders',        # Orders > 15 minutes (from valid orders)
+        '% of delayed orders',   # Percentage based on valid orders
+        'average_duration_orders' # Average duration (from valid orders)
     ]]
     
     # Create Excel file with the specific report
@@ -238,8 +273,11 @@ def create_excel_report():
             # Main sheet with your specific columns
             branch_report.to_excel(writer, sheet_name='Kitchen Performance Report', index=False)
             
-            # Optional: Add a detailed sheet with all orders (you can remove this if not needed)
-            df_with_periods.to_excel(writer, sheet_name='Detailed Orders', index=False)
+            # Optional: Add detailed sheets
+            if len(df_with_periods) > 0:
+                df_with_periods.to_excel(writer, sheet_name='Valid Orders', index=False)
+            if len(df_without_periods) > 0:
+                df_without_periods.to_excel(writer, sheet_name='Invalid Orders', index=False)
         
         # Verify file was created successfully
         if os.path.exists(filename):
@@ -261,7 +299,6 @@ def create_excel_report():
     send_email_report(filename)
     
     return filename
-
 
 def send_email_report(filename):
     """Send the Excel report via SMTP (Gmail)"""
@@ -376,3 +413,4 @@ if __name__ == "__main__":
         print("❌ Missing API_TOKEN or BASE_URL in environment variables")
     else:
         operating(TOKEN, BASE_URL)
+
